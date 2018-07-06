@@ -1,0 +1,19 @@
+load('rpn_conf.mat');
+load('rcnn_conf.mat');
+load('anchors.mat');
+load('bbox_means.mat');
+load('bbox_stds.mat');
+gpu_id = 1;
+test_prototxt_path = '/home/zouzhaofan/Github/SDS-RCNN/output/rpn/caltech_VGG16_weak_seg/test.prototxt'
+weights_path = '/home/zouzhaofan/Github/SDS-RCNN/output/rcnn/caltech_VGG16_weak_seg/final_rpn.caffemodel'
+
+
+% test RPN only
+test_rpn(test_prototxt_path, weights_path, rpn_conf, anchors, bbox_means, bbox_stds, gpu_id)
+
+% test RPN and BCN (full SDS-RCNN)
+test_rcnn(test_prototxt_path, weights_path, rpn_conf, anchors, bbox_means, bbox_stds, ...
+    rcnn_prototxt, rcnn_weights, rcnn_conf, gpu_id)
+
+rcnn_prototxt = '/home/zouzhaofan/Github/SDS-RCNN/output/rcnn/caltech_VGG16_weak_seg/test.prototxt'
+rcnn_weights = '/home/zouzhaofan/Github/SDS-RCNN/output/rcnn/caltech_VGG16_weak_seg/final_rcnn.caffemodel'
