@@ -182,18 +182,26 @@ for d=1:length(dataNames), dataName=dataNames{d};
   %if(~exist(plotName,'dir')), mkdir(plotName); end
 
   % load detections and ground truth and evaluate
-  dts = loadDt( algs, plotName, aspectRatio, aDirs );
-  [gts, occls, ols] = loadGt( exps, plotName, aspectRatio, bnds );
+  dts = loadDt_new( algs, plotName, aspectRatio, aDirs );
+  [gts, occls, ols] = loadGt_new( exps, plotName, aspectRatio, bnds );
   res = evalAlgs( plotName, algs, exps, gts, dts );
   %disp([dbInfo '/res/' names{i} set]);
   
     tp=0; missed=0; 
     for resi=1:length(res.gtr)
         if size(res.gtr{resi}, 1) > 0
-            if (res.gtr{resi}(5) == 1)
-                tp=tp+1;
-            elseif (res.gtr{resi}(5) == 0)
-                missed=missed+1;
+             %revised by zzf
+            for j = 1:size(res.gtr{resi},1)
+                a = res.gtr{resi}(j,1:4);
+                b = [0 0 0 0];
+                if (sum(a == b)==0)
+                    continue;
+                end
+                if (res.gtr{resi}(j,5) == 1)
+                    tp=tp+1;
+                elseif (res.gtr{resi}(j,5) == 0)
+                    missed=missed+1;
+                end
             end
         end
     end
@@ -460,8 +468,12 @@ for i=1:nExp
   ol=cell(1,100000);
   filterGt = @(lbl,bb,bbv) filterGtFun(lbl,bb,bbv,...
     exps(i).hr,exps(i).vr,exps(i).ar,bnds,aspectRatio);
-  for s=1:length(setIds)
-    for v=1:length(vidIds{s})
+  
+% revised by zzf
+  %for s=1:length(setIds)
+  for s=1:1
+    %for v=1:length(vidIds{s})
+    for v=1:1
       A = loadVbb(s,v);
       for f=skip-1:skip:A.nFrame-1
         [bb, bbv, ~] = vbb('frameAnn',A,f+1,lbls,filterGt); ids=bb(:,5)~=1;
@@ -503,6 +515,57 @@ end
   end
 end
 
+function [gts, occls, ols] = loadGt_new( exps, plotName, aspectRatio, bnds )
+
+    s=1;
+    v=1;
+    [~,setIds,vidIds,skip] = dbInfo;
+    rootdir = '/home/zouzhaofan/Github/SDS-RCNN/datasets/caltechx1/test/annotations';
+    txtlist = dir(rootdir);
+    inum = size(txtlist);
+    inum = inum(1);
+    
+    gt=cell(1,100000); k=0; lbls={'person','person?','people','ignore'};
+    occl=cell(1,100000);
+    ol=cell(1,100000);
+    A=loadVbb(s,v); frames=skip-1:skip:A.nFrame-1;
+    
+    for f=1:length(frames)
+        vname = sprintf('%05d',frames(f)+1);
+        fname = sprintf('%s/set00_V000_I%05d.txt',rootdir,frames(f)+1);
+        [x0 y0 w0 h0 ignore x1,y1,w,h,~,~] = textread(fname,'%*s %d %d %d %d %d %d %d %d %d %d %d','headerlines',1);
+        bb = [x0 y0 w0 h0 ignore];
+        bbv = [x1 y1 w h];
+        ids=bb(:,5)~=1;
+
+        oltmp = [];
+        occtmp = logical([]);
+        for bbind=1:size(bb,1)
+            hasocc = ~all(bbv(bbind,:) == 0);
+            occtmp = [occtmp hasocc];
+            boxtest1 = bb(bbind,:);
+            boxtest2 = bbv(bbind,:);
+            
+            boxtest1(3:4) = boxtest1(1:2) + boxtest1(3:4);
+            boxtest2(3:4) = boxtest2(1:2) + boxtest2(3:4);
+            
+            overlap = boxoverlap(boxtest1,boxtest2);
+            
+            if hasocc
+                oltmp = [oltmp overlap];
+            else
+                oltmp = [oltmp -1];
+            end
+        end
+        bb(ids,:)=bbApply('resize',bb(ids,:),1,0,aspectRatio);
+        k=k+1; gt{k}=bb; ol{k} = oltmp'; occl{k} = occtmp';
+    end
+        
+        
+  gt=gt(1:k); gts{1}=gt; %save(gName,'gt','-v6');
+  ol=ol(1:k); occl=occl(1:k); ols{1}=ol; occls{1}=occl;
+end
+
 function dts = loadDt( algs, plotName, aspectRatio, aDirs )
 % Load detections of all algorithm for all frames.
 nAlg=length(algs); dts=cell(1,nAlg);
@@ -511,8 +574,71 @@ for i=1:nAlg
   %fprintf('\tAlgorithm #%d: %s\n', i, algs{i});
   dt=cell(1,100000); k=0; aDir=aDirs{i}; %[dbInfo '/res/' algs(i).name];
   resize=1;
-  for s=1:length(setIds), s1=setIds(s);
-    for v=1:length(vidIds{s}), v1=vidIds{s}(v);
+  
+  % revise by zzf
+  %for s=1:length(setIds), s1=setIds(s);
+  for s=1:1, s1=0;
+    %for v=1:length(vidIds{s}), v1=vidIds{s}(v);
+    for v=1:1, v1=0;
+      A=loadVbb(s,v); frames=skip-1:skip:A.nFrame-1;
+      vName=sprintf('%s/set%02d/V%03d',aDir,s1,v1);
+      if(~exist([vName '.txt'],'file'))
+        % consolidate bbs for video into single text file
+        bbs=cell(length(frames),1);
+        for f=1:length(frames)
+          fName = sprintf('%s/I%05d.txt',vName,frames(f));
+          if(~exist(fName,'file')) 
+            error(['file not found:' fName]);
+            %bb=zeros(0,5);
+          else
+              bb=load(fName,'-ascii'); if(isempty(bb)), bb=zeros(0,5); end       
+
+          end
+          if(size(bb,2)~=5), error('incorrect dimensions'); end
+          bbs{f}=[ones(size(bb,1),1)*(frames(f)+1) bb];
+        end
+        %for f=frames, delete(sprintf('%s/I%05d.txt',vName,f)); end
+        bbs=cell2mat(bbs); dlmwrite([vName '.txt'],bbs); 
+        %rmdir(vName,'s');
+      end
+      bbs=load([vName '.txt'],'-ascii');
+      %disp([num2str(s1) ' ' num2str(v1) ' length is ' num2str(length(bbs))]);
+      %if length(bbs) > 0
+
+          for f=frames
+            if (length(bbs) > 0)
+                bb=bbs(bbs(:,1)==f+1,2:6);
+                %bb = bb((bb(:,5) > .9), :);
+                bb=bbApply('resize',bb,resize,0,aspectRatio);
+             
+            else
+                bb=zeros(1,5);
+            end
+            
+             k=k+1; dt{k}=bb;
+            %disp(size(bb));
+          end
+      %end
+    end
+  end
+  dt=dt(1:k); dts{i}=dt; %save(aName,'dt','-v6');
+end
+end
+
+function dts = loadDt_new( algs, plotName, aspectRatio, aDirs )
+% Load detections of all algorithm for all frames.
+nAlg=length(algs); dts=cell(1,nAlg);
+[~,setIds,vidIds,skip] = dbInfo;
+for i=1:nAlg
+  %fprintf('\tAlgorithm #%d: %s\n', i, algs{i});
+  dt=cell(1,100000); k=0; aDir=aDirs{i}; %[dbInfo '/res/' algs(i).name];
+  resize=1;
+  
+  % revise by zzf
+  %for s=1:length(setIds), s1=setIds(s);
+  for s=1:1, s1=0;
+    %for v=1:length(vidIds{s}), v1=vidIds{s}(v);
+    for v=1:1, v1=0;
       A=loadVbb(s,v); frames=skip-1:skip:A.nFrame-1;
       vName=sprintf('%s/set%02d/V%03d',aDir,s1,v1);
       if(~exist([vName '.txt'],'file'))

@@ -208,6 +208,7 @@ function out_jargin = train_rpn(config_name, gpu_id, solverstate)
             net.copy_from(snapped_file);
             
             % evaluate
+            % revised by zzf
             [mr, recall] = evaluate_results_rpn(rpn_conf, net, results_dir, rpn_conf.val_dir, rpn_conf.val_db);
             fprintf('mr %.4f, recall %.4f\n', mr, recall);
             val_mr(length(val_mr)+1) = mr;
@@ -230,10 +231,10 @@ function out_jargin = train_rpn(config_name, gpu_id, solverstate)
             % loss plot
             subplot(1,2,1);
 
-            plot(x,all_results.acc);
+            plot(x,all_results.acc,'r');
             hold on;
-            plot(x,all_results.fg_acc);
-            plot(x,all_results.bg_acc);
+            plot(x,all_results.fg_acc,'g');
+            plot(x,all_results.bg_acc,'b');
             legend('acc', 'fg-acc', 'bg-acc');
             hold off;
 
@@ -242,10 +243,19 @@ function out_jargin = train_rpn(config_name, gpu_id, solverstate)
 
             loss_legend = cell(length(rpn_conf.loss_layers),1);
             for lossind=1:length(rpn_conf.loss_layers)
-
+                %revised by 
+                if lossind == 1
+                    a=[1 0 0];
+                end
+                if lossind == 2
+                    a=[0 1 0];
+                end
+                if lossind == 3
+                    a=[0 0 1];
+                end
                 loss_name = rpn_conf.loss_layers{lossind};
                 loss_legend{lossind} = strrep(loss_name, '_', '-');
-                plot(x, all_results.(loss_name));
+                plot(x, all_results.(loss_name),'color',a);
                 hold on;
             end
             legend(loss_legend);

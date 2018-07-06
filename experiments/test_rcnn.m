@@ -31,6 +31,12 @@ function test_rcnn(rpn_prototxt, rpn_weights, rpn_conf, anchors, bbox_means, bbo
         %imobj = imlist{imind};
         im = imread([test_dir '/images/' imlist(imind).name]);
         
+        %revised by zzf
+        im_nopad=im;
+        imshow(im);
+        %revised by zzf
+        
+        
         [boxes, scores, feat_scores_bg, feat_scores_fg] = proposal_im_detect(rpn_conf, rpn_net, im);
         
         % filter rpn
@@ -49,6 +55,8 @@ function test_rcnn(rpn_prototxt, rpn_weights, rpn_conf, anchors, bbox_means, bbo
         impadH = round(size(im,1)*rcnn_conf.padfactor);
         impadW = round(size(im,2)*rcnn_conf.padfactor);
         im = padarray(im, [impadH impadW]);
+        
+        %imshow(im);
 
         rois_batch = single(zeros([rcnn_conf.crop_size(2) rcnn_conf.crop_size(1) 3 proposal_num]));
         
@@ -107,6 +115,20 @@ function test_rcnn(rpn_prototxt, rpn_weights, rpn_conf, anchors, bbox_means, bbo
         % score 1 (fused)
         aboxes = [boxes, cls_scores_fused];
 
+        %revised by zzf
+            trueBox = aboxes;
+            h = -trueBox(:,1) + trueBox(:,3);
+            w = -trueBox(:,2)  + trueBox(:,4);
+            trueBox(:,3) = h;
+            trueBox(:,4) = w;
+            trueBox = trueBox(trueBox(:,5)>.9,:);
+           
+            image(im_nopad);
+            if  size(trueBox) ~=0
+                bbApply('draw',trueBox,'g');
+            end
+        %revised by zzf
+        
         for scoreind=1:size(aboxes,1)
 
             x1 = aboxes(scoreind, 1);
@@ -117,6 +139,8 @@ function test_rcnn(rpn_prototxt, rpn_weights, rpn_conf, anchors, bbox_means, bbo
 
             w = x2 - x1;
             h = y2 - y1;
+            
+            
 
             fprintf(fid, '%d,%.3f,%.3f,%.3f,%.3f,%.6f\n', [inum x1 y1 w h score]);
 
@@ -124,7 +148,7 @@ function test_rcnn(rpn_prototxt, rpn_weights, rpn_conf, anchors, bbox_means, bbo
         
         fclose(fid);
         
-    end
+    end   
     
     mr = evaluate_result_dir({results_dir}, rcnn_conf.test_db, rcnn_conf.test_min_h);
     

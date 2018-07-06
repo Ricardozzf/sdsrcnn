@@ -20,7 +20,7 @@ roidb.name = imdb.name;
 
 anno_path = ['./datasets/' dataset '/' roidb.name '/annotations'];
 
-addpath(genpath('./external/code3.2.1'));
+addpath(genpath('./external/caltech_toolbox'));
 pLoad={'lbls',{'person'},'ilbls',{'people', 'ignore'},'squarify',{3,.41}};
 pLoad = [pLoad 'hRng',[min_gt_height inf], 'vRng',[1 1] ];
 

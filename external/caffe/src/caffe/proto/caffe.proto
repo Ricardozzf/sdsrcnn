@@ -407,6 +407,9 @@ message LayerParameter {
   optional WindowDataParameter window_data_param = 129;
   repeated LSTMConvolutionParameter lstm_conv_param = 147;
   optional LSTMDebugParameter lstm_debug_param = 148;
+
+//added by zzf
+  optional RepulsionLossParameter repulsion_loss_param = 151;
 }
 
 // Message that stores parameters used to apply transformation
@@ -1477,3 +1480,8 @@ message PReLUParameter {
   // Whether or not slope parameters are shared across channels.
   optional bool channel_shared = 2 [default = false];
 }
+
+message RepulsionLossParameter{  
+  optional float alpha = 1 [default = 0.5];
+  optional float lambda = 2 [default = 0.5];  
+}  

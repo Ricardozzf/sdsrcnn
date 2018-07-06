@@ -1,0 +1,677 @@
+#include <math_functions.h>  // CUDA's, not caffe's, for fabs, signbit
+#include <thrust/device_vector.h>
+#include <thrust/functional.h>  // thrust::plus
+#include <thrust/reduce.h>
+
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+
+#include "caffe/common.hpp"
+#include "caffe/util/math_functions.hpp"
+
+namespace caffe {
+
+template <>
+void caffe_gpu_gemm<float>(const CBLAS_TRANSPOSE TransA,
+    const CBLAS_TRANSPOSE TransB, const int M, const int N, const int K,
+    const float alpha, const float* A, const float* B, const float beta,
+    float* C) {
+  // Note that cublas follows fortran order.
+  int lda = (TransA == CblasNoTrans) ? K : M;
+  int ldb = (TransB == CblasNoTrans) ? N : K;
+  cublasOperation_t cuTransA =
+      (TransA == CblasNoTrans) ? CUBLAS_OP_N : CUBLAS_OP_T;
+  cublasOperation_t cuTransB =
+      (TransB == CblasNoTrans) ? CUBLAS_OP_N : CUBLAS_OP_T;
+  CUBLAS_CHECK(cublasSgemm(Caffe::cublas_handle(), cuTransB, cuTransA,
+      N, M, K, &alpha, B, ldb, A, lda, &beta, C, N));
+}
+
+template <>
+void caffe_gpu_gemm<double>(const CBLAS_TRANSPOSE TransA,
+    const CBLAS_TRANSPOSE TransB, const int M, const int N, const int K,
+    const double alpha, const double* A, const double* B, const double beta,
+    double* C) {
+  // Note that cublas follows fortran order.
+  int lda = (TransA == CblasNoTrans) ? K : M;
+  int ldb = (TransB == CblasNoTrans) ? N : K;
+  cublasOperation_t cuTransA =
+      (TransA == CblasNoTrans) ? CUBLAS_OP_N : CUBLAS_OP_T;
+  cublasOperation_t cuTransB =
+      (TransB == CblasNoTrans) ? CUBLAS_OP_N : CUBLAS_OP_T;
+  CUBLAS_CHECK(cublasDgemm(Caffe::cublas_handle(), cuTransB, cuTransA,
+      N, M, K, &alpha, B, ldb, A, lda, &beta, C, N));
+}
+
+template <>
+void caffe_gpu_gemv<float>(const CBLAS_TRANSPOSE TransA, const int M,
+    const int N, const float alpha, const float* A, const float* x,
+    const float beta, float* y) {
+  cublasOperation_t cuTransA =
+      (TransA == CblasNoTrans) ? CUBLAS_OP_T : CUBLAS_OP_N;
+  CUBLAS_CHECK(cublasSgemv(Caffe::cublas_handle(), cuTransA, N, M, &alpha,
+      A, N, x, 1, &beta, y, 1));
+}
+
+template <>
+void caffe_gpu_gemv<double>(const CBLAS_TRANSPOSE TransA, const int M,
+    const int N, const double alpha, const double* A, const double* x,
+    const double beta, double* y) {
+  cublasOperation_t cuTransA =
+      (TransA == CblasNoTrans) ? CUBLAS_OP_T : CUBLAS_OP_N;
+  CUBLAS_CHECK(cublasDgemv(Caffe::cublas_handle(), cuTransA, N, M, &alpha,
+      A, N, x, 1, &beta, y, 1));
+}
+
+template <>
+void caffe_gpu_axpy<float>(const int N, const float alpha, const float* X,
+    float* Y) {
+  CUBLAS_CHECK(cublasSaxpy(Caffe::cublas_handle(), N, &alpha, X, 1, Y, 1));
+}
+
+template <>
+void caffe_gpu_axpy<double>(const int N, const double alpha, const double* X,
+    double* Y) {
+  CUBLAS_CHECK(cublasDaxpy(Caffe::cublas_handle(), N, &alpha, X, 1, Y, 1));
+}
+
+void caffe_gpu_memcpy(const size_t N, const void* X, void* Y) {
+  if (X != Y) {
+    CUDA_CHECK(cudaMemcpy(Y, X, N, cudaMemcpyDefault));  // NOLINT(caffe/alt_fn)
+  }
+}
+
+template <>
+void caffe_gpu_scal<float>(const int N, const float alpha, float *X) {
+  CUBLAS_CHECK(cublasSscal(Caffe::cublas_handle(), N, &alpha, X, 1));
+}
+
+template <>
+void caffe_gpu_scal<double>(const int N, const double alpha, double *X) {
+  CUBLAS_CHECK(cublasDscal(Caffe::cublas_handle(), N, &alpha, X, 1));
+}
+
+template <>
+void caffe_gpu_scal<float>(const int N, const float alpha, float* X,
+                           cudaStream_t str) {
+  cudaStream_t initial_stream;
+  CUBLAS_CHECK(cublasGetStream(Caffe::cublas_handle(), &initial_stream));
+  CUBLAS_CHECK(cublasSetStream(Caffe::cublas_handle(), str));
+  CUBLAS_CHECK(cublasSscal(Caffe::cublas_handle(), N, &alpha, X, 1));
+  CUBLAS_CHECK(cublasSetStream(Caffe::cublas_handle(), initial_stream));
+}
+
+template <>
+void caffe_gpu_scal<double>(const int N, const double alpha, double* X,
+                            cudaStream_t str) {
+  cudaStream_t initial_stream;
+  CUBLAS_CHECK(cublasGetStream(Caffe::cublas_handle(), &initial_stream));
+  CUBLAS_CHECK(cublasSetStream(Caffe::cublas_handle(), str));
+  CUBLAS_CHECK(cublasDscal(Caffe::cublas_handle(), N, &alpha, X, 1));
+  CUBLAS_CHECK(cublasSetStream(Caffe::cublas_handle(), initial_stream));
+}
+
+template <>
+void caffe_gpu_axpby<float>(const int N, const float alpha, const float* X,
+    const float beta, float* Y) {
+  caffe_gpu_scal<float>(N, beta, Y);
+  caffe_gpu_axpy<float>(N, alpha, X, Y);
+}
+
+template <>
+void caffe_gpu_axpby<double>(const int N, const double alpha, const double* X,
+    const double beta, double* Y) {
+  caffe_gpu_scal<double>(N, beta, Y);
+  caffe_gpu_axpy<double>(N, alpha, X, Y);
+}
+
+template <>
+void caffe_gpu_dot<float>(const int n, const float* x, const float* y,
+    float* out) {
+  CUBLAS_CHECK(cublasSdot(Caffe::cublas_handle(), n, x, 1, y, 1, out));
+}
+
+template <>
+void caffe_gpu_dot<double>(const int n, const double* x, const double* y,
+    double * out) {
+  CUBLAS_CHECK(cublasDdot(Caffe::cublas_handle(), n, x, 1, y, 1, out));
+}
+
+template <>
+void caffe_gpu_asum<float>(const int n, const float* x, float* y) {
+  CUBLAS_CHECK(cublasSasum(Caffe::cublas_handle(), n, x, 1, y));
+}
+
+template <>
+void caffe_gpu_asum<double>(const int n, const double* x, double* y) {
+  CUBLAS_CHECK(cublasDasum(Caffe::cublas_handle(), n, x, 1, y));
+}
+
+template <>
+void caffe_gpu_scale<float>(const int n, const float alpha, const float *x,
+                            float* y) {
+  CUBLAS_CHECK(cublasScopy(Caffe::cublas_handle(), n, x, 1, y, 1));
+  CUBLAS_CHECK(cublasSscal(Caffe::cublas_handle(), n, &alpha, y, 1));
+}
+
+template <>
+void caffe_gpu_scale<double>(const int n, const double alpha, const double *x,
+                             double* y) {
+  CUBLAS_CHECK(cublasDcopy(Caffe::cublas_handle(), n, x, 1, y, 1));
+  CUBLAS_CHECK(cublasDscal(Caffe::cublas_handle(), n, &alpha, y, 1));
+}
+
+template <typename Dtype>
+__global__ void set_kernel(const int n, const Dtype alpha, Dtype* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = alpha;
+  }
+}
+
+template <typename Dtype>
+void caffe_gpu_set(const int N, const Dtype alpha, Dtype* Y) {
+  if (alpha == 0) {
+    CUDA_CHECK(cudaMemset(Y, 0, sizeof(Dtype) * N));  // NOLINT(caffe/alt_fn)
+    return;
+  }
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  set_kernel<Dtype><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, alpha, Y);
+}
+
+template void caffe_gpu_set<int>(const int N, const int alpha, int* Y);
+template void caffe_gpu_set<float>(const int N, const float alpha, float* Y);
+template void caffe_gpu_set<double>(const int N, const double alpha, double* Y);
+
+template <typename Dtype>
+__global__ void add_scalar_kernel(const int n, const Dtype alpha, Dtype* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] += alpha;
+  }
+}
+
+template <>
+void caffe_gpu_add_scalar(const int N, const float alpha, float* Y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  add_scalar_kernel<float><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, alpha, Y);
+}
+
+template <>
+void caffe_gpu_add_scalar(const int N, const double alpha, double* Y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  add_scalar_kernel<double><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, alpha, Y);
+}
+
+template <typename Dtype>
+__global__ void add_kernel(const int n, const Dtype* a,
+    const Dtype* b, Dtype* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = a[index] + b[index];
+  }
+}
+
+template <>
+void caffe_gpu_add<float>(const int N, const float* a, const float* b,
+    float* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  add_kernel<float><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, b, y);
+}
+
+template <>
+void caffe_gpu_add<double>(const int N, const double* a, const double* b,
+    double* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  add_kernel<double><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, b, y);
+}
+
+template <typename Dtype>
+__global__ void sub_kernel(const int n, const Dtype* a,
+    const Dtype* b, Dtype* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = a[index] - b[index];
+  }
+}
+
+template <>
+void caffe_gpu_sub<float>(const int N, const float* a, const float* b,
+    float* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  sub_kernel<float><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, b, y);
+}
+
+template <>
+void caffe_gpu_sub<double>(const int N, const double* a, const double* b,
+    double* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  sub_kernel<double><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, b, y);
+}
+
+template <typename Dtype>
+__global__ void mul_kernel(const int n, const Dtype* a,
+    const Dtype* b, Dtype* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = a[index] * b[index];
+  }
+}
+
+template <>
+void caffe_gpu_mul<float>(const int N, const float* a,
+    const float* b, float* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  mul_kernel<float><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, b, y);
+}
+
+template <>
+void caffe_gpu_mul<double>(const int N, const double* a,
+    const double* b, double* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  mul_kernel<double><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, b, y);
+}
+
+template <typename Dtype>
+__global__ void div_kernel(const int n, const Dtype* a,
+    const Dtype* b, Dtype* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = a[index] / b[index];
+  }
+}
+
+template <>
+void caffe_gpu_div<float>(const int N, const float* a,
+    const float* b, float* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  div_kernel<float><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, b, y);
+}
+
+template <>
+void caffe_gpu_div<double>(const int N, const double* a,
+    const double* b, double* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  div_kernel<double><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, b, y);
+}
+
+template <typename Dtype>
+__global__ void abs_kernel(const int n, const Dtype* a, Dtype* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = abs(a[index]);
+  }
+}
+
+template <>
+void caffe_gpu_abs<float>(const int N, const float* a, float* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  abs_kernel<float><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, y);
+}
+
+template <>
+void caffe_gpu_abs<double>(const int N, const double* a, double* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  abs_kernel<double><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, y);
+}
+
+
+template <typename Dtype>
+__global__ void exp_kernel(const int n, const Dtype* a, Dtype* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = exp(a[index]);
+  }
+}
+
+template <>
+void caffe_gpu_exp<float>(const int N, const float* a, float* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  exp_kernel<float><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, y);
+}
+
+template <>
+void caffe_gpu_exp<double>(const int N, const double* a, double* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  exp_kernel<double><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, y);
+}
+
+template <typename Dtype>
+__global__ void log_kernel(const int n, const Dtype* a, Dtype* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = log(a[index]);
+  }
+}
+
+template <>
+void caffe_gpu_log<float>(const int N, const float* a, float* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  log_kernel<float><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, y);
+}
+
+template <>
+void caffe_gpu_log<double>(const int N, const double* a, double* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  log_kernel<double><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, y);
+}
+
+template <typename Dtype>
+__global__ void powx_kernel(const int n, const Dtype* a,
+    const Dtype alpha, Dtype* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = pow(a[index], alpha);
+  }
+}
+
+template <>
+void caffe_gpu_powx<float>(const int N, const float* a,
+    const float alpha, float* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  powx_kernel<float><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, alpha, y);
+}
+
+template <>
+void caffe_gpu_powx<double>(const int N, const double* a,
+    const double alpha, double* y) {
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  powx_kernel<double><<<CAFFE_GET_BLOCKS(N), CAFFE_CUDA_NUM_THREADS>>>(
+      N, a, alpha, y);
+}
+
+DEFINE_AND_INSTANTIATE_GPU_UNARY_FUNC(sign, y[index] = (Dtype(0) < x[index])
+                                      - (x[index] < Dtype(0)));
+DEFINE_AND_INSTANTIATE_GPU_UNARY_FUNC(sgnbit, y[index] = signbit(x[index]));
+
+__global__ void popc_kernel(const int n, const float* a,
+    const float* b, uint8_t* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = __popc(static_cast<uint32_t>(a[index]) ^
+                      static_cast<uint32_t>(b[index]));
+  }
+}
+
+__global__ void popcll_kernel(const int n, const double* a,
+    const double* b, uint8_t* y) {
+  CUDA_KERNEL_LOOP(index, n) {
+    y[index] = __popcll(static_cast<uint64_t>(a[index]) ^
+                      static_cast<uint64_t>(b[index]));
+  }
+}
+
+template <>
+uint32_t caffe_gpu_hamming_distance<float>(const int n, const float* x,
+                                  const float* y) {
+  // TODO: Fix caffe_gpu_hamming_distance (see failing unit test
+  // TestHammingDistanceGPU in test_math_functions.cpp).
+  NOT_IMPLEMENTED;
+  thrust::device_vector<uint8_t> popcounts(n);
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  popc_kernel<<<CAFFE_GET_BLOCKS(n), CAFFE_CUDA_NUM_THREADS>>>(
+      n, x, y, thrust::raw_pointer_cast(popcounts.data()));
+  return thrust::reduce(popcounts.begin(), popcounts.end(),
+                        (uint32_t) 0, thrust::plus<uint32_t>());
+}
+
+template <>
+uint32_t caffe_gpu_hamming_distance<double>(const int n, const double* x,
+                                   const double* y) {
+  // TODO: Fix caffe_gpu_hamming_distance (see failing unit test
+  // TestHammingDistanceGPU in test_math_functions.cpp).
+  NOT_IMPLEMENTED;
+  thrust::device_vector<uint8_t> popcounts(n);
+  // NOLINT_NEXT_LINE(whitespace/operators)
+  popcll_kernel<<<CAFFE_GET_BLOCKS(n), CAFFE_CUDA_NUM_THREADS>>>(
+      n, x, y, thrust::raw_pointer_cast(popcounts.data()));
+  return thrust::reduce(popcounts.begin(), popcounts.end(),
+                        /* NOLINT_NEXT_LINE(build/include_what_you_use) */
+                        (uint32_t) 0, thrust::plus<uint32_t>());
+}
+
+void caffe_gpu_rng_uniform(const int n, unsigned int* r) {
+  CURAND_CHECK(curandGenerate(Caffe::curand_generator(), r, n));
+}
+
+template <>
+void caffe_gpu_rng_uniform<float>(const int n, const float a, const float b,
+                                  float* r) {
+  CURAND_CHECK(curandGenerateUniform(Caffe::curand_generator(), r, n));
+  const float range = b - a;
+  if (range != static_cast<float>(1)) {
+    caffe_gpu_scal(n, range, r);
+  }
+  if (a != static_cast<float>(0)) {
+    caffe_gpu_add_scalar(n, a, r);
+  }
+}
+
+template <>
+void caffe_gpu_rng_uniform<double>(const int n, const double a, const double b,
+                                   double* r) {
+  CURAND_CHECK(curandGenerateUniformDouble(Caffe::curand_generator(), r, n));
+  const double range = b - a;
+  if (range != static_cast<double>(1)) {
+    caffe_gpu_scal(n, range, r);
+  }
+  if (a != static_cast<double>(0)) {
+    caffe_gpu_add_scalar(n, a, r);
+  }
+}
+
+template <>
+void caffe_gpu_rng_gaussian(const int n, const float mu, const float sigma,
+                            float* r) {
+  CURAND_CHECK(
+      curandGenerateNormal(Caffe::curand_generator(), r, n, mu, sigma));
+}
+
+template <>
+void caffe_gpu_rng_gaussian(const int n, const double mu, const double sigma,
+                            double* r) {
+  CURAND_CHECK(
+      curandGenerateNormalDouble(Caffe::curand_generator(), r, n, mu, sigma));
+}
+
+
+__global__ void histo_kernel(unsigned char *buffer, long size, unsigned int *histo, const int max_pixel, const int BIN_NUM_)
+{
+	// clear out the accumulation buffer called temp
+	// since we are launched with 256 threads, it is easy
+	// to clear that memory with one write per thread
+	const int BIN_NUM = 16;// bin number in one channel
+	__shared__  unsigned int temp[BIN_NUM];
+	temp[threadIdx.x] = 0;
+	__syncthreads();
+
+	// calculate the starting index and the offset to the next
+	// block that each thread will be processing
+	int i = threadIdx.x + blockIdx.x * blockDim.x;
+	int stride = blockDim.x * gridDim.x;
+	int fenmu = max_pixel / BIN_NUM;// 256 / 32
+	while (i < size) {
+		unsigned int div = buffer[i] / fenmu;
+
+		atomicAdd( &temp[div], 1 );
+		i += stride;
+
+		//atomicAdd(&temp[buffer[i]], 1);
+		//i += stride;
+
+	}
+	// sync the data from the above writes to shared memory
+	// then add the shared memory values to the values from
+	// the other thread blocks using global memory
+	// atomic adds
+	// same as before, since we have 256 threads, updating the
+	// global histogram is just one write per thread!
+	__syncthreads();
+	atomicAdd( &(histo[threadIdx.x]), temp[threadIdx.x] );
+}
+
+
+void test_gpu_histo(unsigned char *dev_buffer, long size, unsigned int *dev_histo, const int max_pixel, const int bin_num)
+{
+    // kernel launch - 2x the number of mps gave best timing
+    cudaDeviceProp  prop;
+    CUDA_CHECK( cudaGetDeviceProperties( &prop, 0 ) );
+    int blocks = prop.multiProcessorCount;
+    const int BIN_NUM = bin_num;// bin number in one channel
+    histo_kernel<<<blocks*2,BIN_NUM>>>( dev_buffer,	size, dev_histo, max_pixel, BIN_NUM);
+
+}
+
+
+/*******************nms******************/
+#define DIVUP(m,n) ((m) / (n) + ((m) % (n) > 0))
+int const threadsPerBlock = sizeof(unsigned long long) * 8;
+__global__ void nms_kernel(const int n_boxes, const float nms_overlap_thresh, const float *dev_boxes, unsigned long long *dev_mask)
+{
+  const int row_start = blockIdx.y;
+  const int col_start = blockIdx.x;
+
+  // if (row_start > col_start) return;
+
+  const int row_size = min(n_boxes - row_start * threadsPerBlock, threadsPerBlock);
+  const int col_size = min(n_boxes - col_start * threadsPerBlock, threadsPerBlock);
+
+  __shared__ float block_boxes[threadsPerBlock * 5];
+  if (threadIdx.x < col_size)
+  {
+    block_boxes[threadIdx.x * 5 + 0] =
+        dev_boxes[(threadsPerBlock * col_start + threadIdx.x) * 5 + 0];
+    block_boxes[threadIdx.x * 5 + 1] =
+        dev_boxes[(threadsPerBlock * col_start + threadIdx.x) * 5 + 1];
+    block_boxes[threadIdx.x * 5 + 2] =
+        dev_boxes[(threadsPerBlock * col_start + threadIdx.x) * 5 + 2];
+    block_boxes[threadIdx.x * 5 + 3] =
+        dev_boxes[(threadsPerBlock * col_start + threadIdx.x) * 5 + 3];
+    block_boxes[threadIdx.x * 5 + 4] =
+        dev_boxes[(threadsPerBlock * col_start + threadIdx.x) * 5 + 4];
+  }
+  __syncthreads();
+
+  if (threadIdx.x < row_size) {
+    const int cur_box_idx = threadsPerBlock * row_start + threadIdx.x;
+    const float *cur_box = dev_boxes + cur_box_idx * 5;
+    int i = 0;
+    unsigned long long t = 0;
+    int start = 0;
+    if (row_start == col_start) {
+      start = threadIdx.x + 1;
+    }
+    for (i = start; i < col_size; i++) {
+      if (devIoU(cur_box, block_boxes + i * 5) > nms_overlap_thresh) {
+        t |= 1ULL << i;
+      }
+    }
+    const int col_blocks = DIVUP(n_boxes, threadsPerBlock);
+    dev_mask[cur_box_idx * col_blocks + col_start] = t;
+  }
+}
+
+__device__ inline float devIoU(float const * const a, float const * const b)
+{
+	float left = max(a[0], b[0]), right = min(a[2], b[2]);
+	float top = max(a[1], b[1]), bottom = min(a[3], b[3]);
+	float width = max(right - left + 1, 0.f), height = max(bottom - top + 1, 0.f);
+	float interS = width * height;
+	float Sa = (a[2] - a[0] + 1) * (a[3] - a[1] + 1);
+	float Sb = (b[2] - b[0] + 1) * (b[3] - b[1] + 1);
+	return interS / (Sa + Sb - interS);
+}
+
+void _set_device(int device_id) {
+  int current_device;
+  CUDA_CHECK(cudaGetDevice(&current_device));
+  if (current_device == device_id) {
+    return;
+  }
+  // The call to cudaSetDevice must come before any calls to Get, which
+  // may perform initialization using the GPU.
+  CUDA_CHECK(cudaSetDevice(device_id));
+}
+
+void _nms(int* keep_out, int* num_out, const float* boxes_host, int boxes_num, int boxes_dim, float nms_overlap_thresh)
+{
+//	_set_device(0);
+	float* boxes_dev = NULL;
+	unsigned long long* mask_dev = NULL;
+
+	const int col_blocks = DIVUP(boxes_num, threadsPerBlock);
+
+	CUDA_CHECK(cudaMalloc(&boxes_dev, boxes_num * boxes_dim * sizeof(float)));
+	CUDA_CHECK(cudaMemcpy(boxes_dev, boxes_host, boxes_num * boxes_dim * sizeof(float), cudaMemcpyHostToDevice));
+
+	CUDA_CHECK(cudaMalloc(&mask_dev, boxes_num * col_blocks * sizeof(unsigned long long)));
+
+	dim3 blocks(DIVUP(boxes_num, threadsPerBlock), DIVUP(boxes_num, threadsPerBlock));
+	dim3 threads(threadsPerBlock);
+	nms_kernel<<<blocks, threads>>>(boxes_num, nms_overlap_thresh, boxes_dev, mask_dev);
+
+	std::vector<unsigned long long> mask_host(boxes_num * col_blocks);
+	CUDA_CHECK(cudaMemcpy(&mask_host[0], mask_dev, sizeof(unsigned long long) * boxes_num * col_blocks, cudaMemcpyDeviceToHost));
+
+
+	std::vector<unsigned long long> remv(col_blocks);
+	memset(&remv[0], 0, sizeof(unsigned long long) * col_blocks);
+
+	int num_to_keep = 0;
+	for(int i = 0; i < boxes_num; i++)
+	{
+		int nblock = i / threadsPerBlock;
+		int inblock = i % threadsPerBlock;
+
+		if(!(remv[nblock] & (1ULL << inblock)))
+		{
+			keep_out[num_to_keep++] = i;
+			unsigned long long *p = &mask_host[0] + i * col_blocks;
+			for(int j = nblock; j < col_blocks; j++)
+			{
+				remv[j] |= p[j];
+			}
+		}
+	}
+
+	*num_out = num_to_keep;
+
+	CUDA_CHECK(cudaFree(mask_dev));mask_dev = NULL;
+	CUDA_CHECK(cudaFree(boxes_dev));boxes_dev = NULL;
+
+}
+
+int *gpu_nms(float *sorted_dets, int *keep_out_size, /*vector<int> & keep_out,*/ int boxes_num, int boxes_dim, float thresh)//input;output;output rows;input rows;input cols;thread
+{
+	int num_out;
+	int *index = (int *)malloc(boxes_num * sizeof(int));
+	_nms(index, &num_out, sorted_dets, boxes_num, boxes_dim, thresh);
+	if(num_out == 0)
+	{
+		std::cout << "num_out ==0ERROR\n";
+
+	}
+
+	int *keep_out = (int *)malloc(num_out * sizeof(int));
+	*keep_out_size = num_out;
+	for(int i = 0; i < num_out; i++)
+	{
+		//keep_out.push_back(index[i]);
+		keep_out[i] = index[i];
+	}
+	free(index);
+
+	return keep_out;
+}
+
+
+
+}  // namespace caffe

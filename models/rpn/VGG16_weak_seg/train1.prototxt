@@ -43,41 +43,6 @@ input_dim: 1        # 9(anchors)
 input_dim: 14  		# size for 224 input image, to be changed on-the-fly to match input dim
 input_dim: 14  		# size for 224 input image, to be changed on-the-fly to match input dim
 
-#repulsion loss blob RepGT added by zzf
-input: "RepGT_anchors"
-input_dim: 1        # to be changed on-the-fly to match input dim
-input_dim: 36       # 4 * 9(anchors) 
-input_dim: 14       # size for 224 input image, to be changed on-the-fly to match input dim
-input_dim: 14       # size for 224 input image, to be changed on-the-fly to match input dim
-
-
-input: "RepGT_gt"
-input_dim: 1        # to be changed on-the-fly to match input dim
-input_dim: 36       # 4 * 9(anchors) 
-input_dim: 14       # size for 224 input image, to be changed on-the-fly to match input dim
-input_dim: 14       # size for 224 input image, to be changed on-the-fly to match input dim
-
-
-input: "RepGT_label"
-input_dim: 1        # to be changed on-the-fly to match input dim
-input_dim: 9        # 9(anchors) 
-input_dim: 14       # size for 224 input image, to be changed on-the-fly to match input dim
-input_dim: 14       # size for 224 input image, to be changed on-the-fly to match input dim
-
-
-input: "RepBox_label"
-input_dim: 1
-input_dim: 9
-input_dim: 14
-input_dim: 14
-
-input: "bbox_nm"
-input_dim: 1
-input_dim: 1
-input_dim: 2
-input_dim: 4
-
-
 
 layer {
 	bottom: "data"
@@ -708,17 +673,10 @@ layer {
 
 layer {
   name: "loss_bbox"
-  type: "RepulsionLoss"
+  type: "SmoothL1Loss"
   bottom: "proposal_bbox_pred"
   bottom: "bbox_targets"
   bottom: "bbox_loss_weights"
-
-  bottom: "RepGT_anchors"
-  bottom: "RepGT_gt"
-  bottom: "RepGT_label"
-  bottom: "RepBox_label"
-  bottom: "bbox_nm"
-
   top: "loss_bbox"
   loss_weight: 5
 }

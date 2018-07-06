@@ -63,9 +63,18 @@ function [input_blobs, random_scale_inds, im_rgb] = proposal_generate_minibatch(
     label_weights_blob = zeros(output_size(2), output_size(1), size(conf.anchors, 1), length(image_roidb));
     bbox_targets_blob = zeros(output_size(2), output_size(1), size(conf.anchors, 1)*4, length(image_roidb));
     bbox_loss_blob = zeros(output_size(2), output_size(1), size(conf.anchors, 1)*4, length(image_roidb));
+    % added by zzf
+    RepGT_anchors_blob =  zeros(output_size(2), output_size(1), size(conf.anchors, 1)*4, length(image_roidb));
+    RepGT_gt_blob = zeros(output_size(2), output_size(1), size(conf.anchors, 1)*4, length(image_roidb));
+    RepGT_label_blob = zeros(output_size(2), output_size(1), size(conf.anchors, 1), length(image_roidb));
+    RepBox_label_blob = zeros(output_size(2),output_size(1),size(conf.anchors,1),length(image_roidb));
+    % added by zzf
     
-    [labels, label_weights, bbox_targets, bbox_loss] = ...
+    
+    %revised by zzf
+    [labels, label_weights, bbox_targets, bbox_loss, RepGT_anchors, RepGT_gt, RepGT_label, RepBox_label] = ...
         sample_rois(conf, image_roidb(1), fg_rois_per_image, rois_per_image, im_scales(1));
+    cur_bbox_nm_blob = [conf.bbox_means;conf.bbox_stds];
 
     assert(img_size(1) == size(im_blob, 1) && img_size(2) == size(im_blob, 2));
 
@@ -73,7 +82,16 @@ function [input_blobs, random_scale_inds, im_rgb] = proposal_generate_minibatch(
     cur_label_weights_blob = reshape(label_weights, size(conf.anchors, 1), output_size(1), output_size(2));
     cur_bbox_targets_blob = reshape(bbox_targets', size(conf.anchors, 1)*4, output_size(1), output_size(2));
     cur_bbox_loss_blob = reshape(bbox_loss', size(conf.anchors, 1)*4, output_size(1), output_size(2));
-
+    
+    %added by zzf
+    cur_RepGT_anchors_blob = reshape(RepGT_anchors', size(conf.anchors, 1)*4, output_size(1), output_size(2));
+    cur_RepGT_gt_blob = reshape(RepGT_gt', size(conf.anchors, 1)*4, output_size(1), output_size(2));
+    cur_RepGT_label_blob = reshape(RepGT_label, size(conf.anchors, 1), output_size(1), output_size(2));
+    
+    cur_RepBox_label_blob = reshape(RepBox_label, size(conf.anchors, 1), output_size(1), output_size(2));
+    cur_bbox_nm_blob = reshape(cur_bbox_nm_blob',4,2,1);
+    %added by zzf
+    
     % permute from [channel, height, width], where channel is the
     % fastest dimension to [width, height, channel]
     cur_labels_blob = permute(cur_labels_blob, [3, 2, 1]);
@@ -81,12 +99,33 @@ function [input_blobs, random_scale_inds, im_rgb] = proposal_generate_minibatch(
     cur_label_weights_blob = permute(cur_label_weights_blob, [3, 2, 1]);
     cur_bbox_targets_blob = permute(cur_bbox_targets_blob, [3, 2, 1]);
     cur_bbox_loss_blob = permute(cur_bbox_loss_blob, [3, 2, 1]);
+    
+    
+    %added by zzf
+    cur_RepGT_anchors_blob = permute(cur_RepGT_anchors_blob,[3,2,1]);
+    cur_RepGT_gt_blob = permute(cur_RepGT_gt_blob,[3,2,1]);
+    cur_RepGT_label_blob = permute(cur_RepGT_label_blob,[3,2,1]);
+    
+    cur_RepBox_label_blob = permute(cur_RepBox_label_blob,[3,2,1]);
+    
+    %added by zzf
 
     labels_blob(:, :, :, 1) = cur_labels_blob;
 
     label_weights_blob(:, :, :, 1) = cur_label_weights_blob;
     bbox_targets_blob(:, :, :, 1) = cur_bbox_targets_blob;
     bbox_loss_blob(:, :, :, 1) = cur_bbox_loss_blob;
+    
+    % added by zzf
+    RepGT_anchors_blob(:,:,:,1)  = cur_RepGT_anchors_blob;
+    RepGT_gt_blob(:,:,:,1) = cur_RepGT_gt_blob;
+    RepGT_label_blob(:,:,:,1) = cur_RepGT_label_blob;
+    
+    RepBox_label_blob(:,:,:,1) = cur_RepBox_label_blob;
+    
+    
+    bbox_nm_blob(:,:,:,1) = cur_bbox_nm_blob;
+    % added by zzf
     
     % permute data into caffe c++ memory, thus [num, channels, height, width]
     im_blob = im_blob(:, :, [3, 2, 1], :); % from rgb to brg
@@ -96,19 +135,46 @@ function [input_blobs, random_scale_inds, im_rgb] = proposal_generate_minibatch(
     label_weights_blob = single(label_weights_blob);
     bbox_targets_blob = single(bbox_targets_blob); 
     bbox_loss_blob = single(bbox_loss_blob);
+    % added by zzf
+    RepGT_anchors_blob = single(RepGT_anchors_blob);
+    RepGT_gt_blob = single(RepGT_gt_blob);
+    RepGT_label_blob = single(RepGT_label_blob);
+    RepGT_label_blob(RepGT_label_blob > 0) =1;
+    RepBox_label_blob = single(RepBox_label_blob);
+    
+    bbox_nm_blob = single(bbox_nm_blob);
+    % added by zzf
+    
     
     assert(~isempty(im_blob));
     assert(~isempty(labels_blob));
     assert(~isempty(label_weights_blob));
     assert(~isempty(bbox_targets_blob));
     assert(~isempty(bbox_loss_blob));
+    % added by zzf
+    assert(~isempty(RepGT_anchors_blob));
+    assert(~isempty(RepGT_gt_blob));
+    assert(~isempty(RepGT_label_blob));
+    assert(~isempty(RepBox_label_blob));
+    assert(~isempty(bbox_nm_blob));
+    % added by zzf
     
+    % revised by zzf
     input_blobs = {im_blob, labels_blob, label_weights_blob, bbox_targets_blob, bbox_loss_blob};
     
     if conf.has_weak
         input_blobs{length(input_blobs) + 1} = ped_mask;
         input_blobs{length(input_blobs) + 1} = ped_mask_weights;
     end
+    
+    % added by zzf
+    input_blobs{length(input_blobs) + 1} = RepGT_anchors_blob;
+    input_blobs{length(input_blobs) + 1} = RepGT_gt_blob;
+    input_blobs{length(input_blobs) + 1} = RepGT_label_blob;
+    
+    input_blobs{length(input_blobs) + 1} = RepBox_label_blob;
+    input_blobs{length(input_blobs) + 1} = bbox_nm_blob;
+    % added by zzf
     
 end
 
@@ -133,7 +199,7 @@ function [im_blob, im_scales, im_] = get_image_blob(conf, images, random_scale_i
 end
 
 %% Generate a random sample of ROIs comprising foreground and background examples.
-function [labels, label_weights, bbox_targets, bbox_loss_weights] = sample_rois(conf, image_roidb, fg_rois_per_image, rois_per_image, im_scale)
+function [labels, label_weights, bbox_targets, bbox_loss_weights,RepGT_anchors,RepGT_gt,RepGT_label, RepBox_label] = sample_rois(conf, image_roidb, fg_rois_per_image, rois_per_image, im_scale)
 
     [anchors, ~] = proposal_locate_anchors(conf, image_roidb.im_size);
 
@@ -148,6 +214,20 @@ function [labels, label_weights, bbox_targets, bbox_loss_weights] = sample_rois(
        [bbox_targets, ~] = ...
            proposal_compute_targets(conf, scale_rois(image_roidb.boxes, image_roidb.im_size, im_scale), gt_ignores, image_roidb.class,  anchors{1}, image_roidb, im_scale);
     end
+    
+    %added by zzf ------------------------------------------------
+    
+    if isempty(image_roidb.boxes)
+
+       [RepGT_gt, RepGT_label, RepBox_label] = ...
+           proposal_compute_targets_IoG(conf, image_roidb.boxes, gt_ignores, image_roidb.class,  anchors{1}, image_roidb, im_scale);
+    else
+       [RepGT_gt, RepGT_label, RepBox_label] = ...
+           proposal_compute_targets_IoG(conf, scale_rois(image_roidb.boxes, image_roidb.im_size, im_scale), gt_ignores, image_roidb.class,  anchors{1}, image_roidb, im_scale);
+    end
+    
+    RepGT_anchors = anchors{1};
+    %added by zzf ------------------------------------------------
 
     gt_inds = find(bbox_targets(:, 1) > 0);
     if ~isempty(gt_inds)
